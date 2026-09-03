@@ -71,6 +71,10 @@ class SMSSettingController extends Controller
             $input['twilio_section'] = json_encode($input['twilio_section'], true);
         }
 
+        if (!\Illuminate\Support\Facades\Schema::hasColumn('settings', 'sms_gateway')) {
+            unset($input['sms_gateway'], $input['automas_api_key'], $input['automas_sender_id'], $input['automas_type']);
+        }
+
         Setting::first()->update($input);
         return redirect()->back()->withSuccess(__('Data Updated Successfully.'));
     }
