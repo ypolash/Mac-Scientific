@@ -5,15 +5,27 @@ use Twilio\Rest\Client;
 
 class SmsHelper {
 
-    public function SendSms($to_number ,$type,$order_number = null)
+    public function SendSms($to_number, $type, $order_number = null)
     {
         $setting = Setting::first();
-        if ($setting->is_twilio == 0 || empty($setting->sms_url)) {
+        if ($setting->is_twilio == 0) {
+            return;
+        }
+        
+        $gateway = $setting->sms_gateway ?? 'automas';
+        if ($gateway == 'custom' && empty($setting->sms_url)) {
+            return;
+        }
+        if ($gateway == 'automas' && (empty($setting->automas_api_key) || empty($setting->automas_sender_id))) {
             return;
         }
 
-        $sms_section = json_decode($setting->twilio_section,true);
-        $template = $sms_section[$type] ?? '';
+        $sms_section = json_decode($setting->twilio_section, true) ?? [];
+        
+        // Handle both with and without quotes for safety
+        $template = $sms_section[$type] ?? ($sms_section[trim($type, "'\"")] ?? ($sms_section["'" . trim($type, "'\"") . "'"] ?? ''));
+        if(empty($template)) return;
+
         $body = preg_replace("/{order_number}/", $order_number , $template);
         
         $order = \App\Models\Order::where('transaction_number', $order_number)->first();
@@ -53,52 +65,109 @@ class SmsHelper {
             $body = preg_replace("/{payment_method}/", $payment_method, $body);
         }
 
-        try {
-            $url = $setting->sms_url;
-            $url = str_replace('{number}', $to_number, $url);
-            $url = str_replace('{message}', urlencode($body), $url);
-
-            if (function_exists('exec') && !in_array('exec', array_map('trim', explode(', ', ini_get('disable_functions'))))) {
-                exec("curl -s -o /dev/null -w '' " . escapeshellarg($url) . " > /dev/null 2>&1 &");
-            } else {
-                $ch = curl_init();
-                curl_setopt($ch, CURLOPT_URL, $url);
-                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-                curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-                curl_setopt($ch, CURLOPT_TIMEOUT, 2);
-                $response = curl_exec($ch);
-                curl_close($ch);
-            }
-        } catch (\Throwable $th) {
-            // throw $th;
-        }
+        $this->dispatchSms($setting, $to_number, $body);
     }
 
     public function SendCustomSms($to_number, $body)
     {
         $setting = Setting::first();
-        if ($setting->is_twilio == 0 || empty($setting->sms_url) || empty($to_number)) {
+        if ($setting->is_twilio == 0 || empty($to_number)) {
             return;
         }
 
-        try {
-            $url = $setting->sms_url;
-            $url = str_replace('{number}', $to_number, $url);
-            $url = str_replace('{message}', urlencode($body), $url);
+        $this->dispatchSms($setting, $to_number, $body);
+    }
 
-            if (function_exists('exec') && !in_array('exec', array_map('trim', explode(', ', ini_get('disable_functions'))))) {
-                exec("curl -s -o /dev/null -w '' " . escapeshellarg($url) . " > /dev/null 2>&1 &");
+    private function dispatchSms($setting, $to_number, $body)
+    {
+        $gateway = $setting->sms_gateway ?? 'automas';
+
+        if ($gateway == 'automas') {
+            $this->sendAutomasDirect($to_number, $body, $setting->automas_api_key, $setting->automas_sender_id, $setting->automas_type);
+        } else {
+            // Custom Universal Gateway
+            if(empty($setting->sms_url)) return;
+            try {
+                $url = $setting->sms_url;
+                $url = str_replace('{number}', $to_number, $url);
+                $url = str_replace('{message}', urlencode($body), $url);
+
+                if (function_exists('exec') && !in_array('exec', array_map('trim', explode(', ', ini_get('disable_functions'))))) {
+                    exec("curl -s -o /dev/null -w '' " . escapeshellarg($url) . " > /dev/null 2>&1 &");
+                } else {
+                    $ch = curl_init();
+                    curl_setopt($ch, CURLOPT_URL, $url);
+                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+                    curl_setopt($ch, CURLOPT_TIMEOUT, 2);
+                    curl_exec($ch);
+                    curl_close($ch);
+                }
+            } catch (\Throwable $th) {
+                \Log::error('Universal SMS Error: ' . $th->getMessage());
+            }
+        }
+    }
+
+    public function sendAutomasDirect($to_number, $body, $apiKey, $senderId, $type = 'auto', $async = true)
+    {
+        if (empty($apiKey) || empty($senderId)) {
+            return false;
+        }
+
+        // Clean phone number (remove +, spaces, dashes, parentheses)
+        $clean_number = preg_replace('/[^0-9]/', '', $to_number);
+        
+        // Normalize Bangladesh number formats
+        if (preg_match('/^01[3-9]\d{8}$/', $clean_number)) {
+            $clean_number = '88' . $clean_number; // e.g., 017... to 88017...
+        }
+
+        // Auto-detect Unicode (if string length != mb_strlen)
+        $is_unicode = false;
+        if ($type == 'unicode') {
+            $is_unicode = true;
+        } elseif ($type == 'auto') {
+            if (strlen($body) != mb_strlen($body, 'UTF-8')) {
+                $is_unicode = true;
+            }
+        }
+
+        $payload = [
+            'apikey' => $apiKey,
+            'sender' => $senderId,
+            'msisdn' => $clean_number,
+            'smstext' => $body,
+        ];
+
+        if ($is_unicode) {
+            $payload['type'] = 8;
+            $payload['smsformat'] = 8;
+        }
+
+        $url = "https://api.automas.com.bd/smsapiv3";
+
+        try {
+            if ($async && function_exists('exec') && !in_array('exec', array_map('trim', explode(', ', ini_get('disable_functions'))))) {
+                $postData = http_build_query($payload);
+                $cmd = "curl -s -X POST " . escapeshellarg($url) . " -d " . escapeshellarg($postData) . " > /dev/null 2>&1 &";
+                exec($cmd);
+                return true;
             } else {
                 $ch = curl_init();
                 curl_setopt($ch, CURLOPT_URL, $url);
+                curl_setopt($ch, CURLOPT_POST, 1);
+                curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($payload));
                 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
                 curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-                curl_setopt($ch, CURLOPT_TIMEOUT, 2);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 5);
                 $response = curl_exec($ch);
                 curl_close($ch);
+                return $response;
             }
         } catch (\Throwable $th) {
-            // throw $th;
+            \Log::error('Automas SMS Error: ' . $th->getMessage());
+            return false;
         }
     }
 }

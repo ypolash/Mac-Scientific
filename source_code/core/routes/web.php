@@ -326,6 +326,7 @@ Route::group(['middleware' => 'adminlocalize'], function () {
             // ----------- SMS SETTING ---------------//
             Route::get('/setting/configuration/sms', 'Back\SmsSettingController@sms')->name('back.setting.sms');
             Route::post('/setting/sms/update', 'Back\SmsSettingController@smsUpdate')->name('back.sms.update');
+            Route::post('/setting/sms/test', 'Back\SmsSettingController@testSms')->name('back.sms.test');
             // ----------- SMS SETTING ---------------//
 
             //------------ LANGUAGE SETTING ------------
