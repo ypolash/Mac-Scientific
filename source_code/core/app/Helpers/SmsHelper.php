@@ -26,7 +26,7 @@ class SmsHelper {
         $template = $sms_section[$type] ?? ($sms_section[trim($type, "'\"")] ?? ($sms_section["'" . trim($type, "'\"") . "'"] ?? ''));
         if(empty($template)) return;
 
-        $body = preg_replace("/{order_number}/", $order_number , $template);
+        $body = str_replace("{order_number}", $order_number , $template);
         
         $order = \App\Models\Order::where('transaction_number', $order_number)->first();
         if($order) {
@@ -56,16 +56,34 @@ class SmsHelper {
 
             $payment_method = $order->payment_method ?? 'Unknown';
 
-            $body = preg_replace("/{order_amount}/", $order_amount, $body);
-            $body = preg_replace("/{order_date}/", $order_date, $body);
-            $body = preg_replace("/{customer_name}/", $customer_name, $body);
-            $body = preg_replace("/{customer_phone}/", $customer_phone, $body);
-            $body = preg_replace("/{customer_address}/", $customer_address, $body);
-            $body = preg_replace("/{order_items}/", $order_items, $body);
-            $body = preg_replace("/{payment_method}/", $payment_method, $body);
+            $body = str_replace("{order_amount}", $order_amount, $body);
+            $body = str_replace("{order_date}", $order_date, $body);
+            $body = str_replace("{customer_name}", $customer_name, $body);
+            $body = str_replace("{customer_phone}", $customer_phone, $body);
+            $body = str_replace("{customer_address}", $customer_address, $body);
+            $body = str_replace("{order_items}", $order_items, $body);
+            $body = str_replace("{payment_method}", $payment_method, $body);
         }
 
         $this->dispatchSms($setting, $to_number, $body);
+
+        // Send to merchant automatically for new purchases
+        if (trim($type, "'\"") == 'purchase' && !empty($setting->footer_phone)) {
+            $merchant_template = $sms_section["'merchant_purchase'"] ?? ($sms_section["merchant_purchase"] ?? '');
+            if (!empty($merchant_template)) {
+                $merchant_body = str_replace("{order_number}", $order_number, $merchant_template);
+                if ($order) {
+                    $merchant_body = str_replace("{order_amount}", $order_amount, $merchant_body);
+                    $merchant_body = str_replace("{order_date}", $order_date, $merchant_body);
+                    $merchant_body = str_replace("{customer_name}", $customer_name, $merchant_body);
+                    $merchant_body = str_replace("{customer_phone}", $customer_phone, $merchant_body);
+                    $merchant_body = str_replace("{customer_address}", $customer_address, $merchant_body);
+                    $merchant_body = str_replace("{order_items}", $order_items, $merchant_body);
+                    $merchant_body = str_replace("{payment_method}", $payment_method, $merchant_body);
+                }
+                $this->dispatchSms($setting, $setting->footer_phone, $merchant_body);
+            }
+        }
     }
 
     public function SendCustomSms($to_number, $body)

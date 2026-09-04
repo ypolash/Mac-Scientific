@@ -542,8 +542,7 @@ class CheckoutController extends Controller
 
 
             if($setting->is_twilio == 1 && !empty($setting->footer_phone)){
-                $sms = new SmsHelper();
-                $sms->SendSms($setting->footer_phone, "'merchant_purchase'", $order->transaction_number);
+                // merchant sms is now handled automatically in SmsHelper::SendSms
             }
 
             return view('front.checkout.success',compact('order','cart'));
